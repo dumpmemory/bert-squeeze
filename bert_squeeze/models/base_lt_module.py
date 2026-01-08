@@ -302,15 +302,26 @@ class BaseTransformerModule(pl.LightningModule):
 
         It uses the evaluation scorer to log all the available losses and metrics
         """
-        table = self.valid_scorer.get_table()
+        eval_report = self.valid_scorer.to_dict()
+        try:
+            table = self.valid_scorer.get_table(eval_report)
+        except TypeError:
+            table = self.valid_scorer.get_table()
         self.logger.experiment.add_text("eval/report", table)
 
-        logging_loss = {
-            key: torch.stack(val).mean() for key, val in self.valid_scorer.losses.items()
-        }
-        self.log_dict({f"eval/loss_{key}": val for key, val in logging_loss.items()})
+        logging_loss = {}
+        for key, values in self.valid_scorer.losses.items():
+            if not values:
+                continue
+            first = values[0]
+            if isinstance(first, torch.Tensor):
+                logging_loss[key] = torch.stack(values).mean()
+            else:
+                logging_loss[key] = torch.tensor(np.mean(values))
 
-        eval_report = self.valid_scorer.to_dict()
+        if logging_loss:
+            self.log_dict({f"eval/loss_{key}": val for key, val in logging_loss.items()})
+
         for metric, value in eval_report.items():
             if isinstance(value, dict):
                 self.log_dict({f"eval/{metric}/{key}": v for key, v in value.items()})
@@ -346,14 +357,18 @@ class BaseSequenceClassificationTransformerModule(BaseTransformerModule):
         scorer: Scorer = None,
         **kwargs,
     ):
-        super().__init__(training_config, pretrained_model, model, scorer, **kwargs)
-        self._sanity_checks(training_config)
-
         self.num_labels = num_labels
         self.model_config = AutoConfig.from_pretrained(
             pretrained_model, num_labels=num_labels
         )
 
+        if model is None:
+            model = self.BASE_CLASS_MODEL.from_pretrained(
+                pretrained_model, config=self.model_config
+            )
+
+        super().__init__(training_config, pretrained_model, model, scorer, **kwargs)
+        self._sanity_checks(training_config)
         self._set_objective()
 
     def on_validation_epoch_end(self):
@@ -415,7 +430,7 @@ class BaseSequenceClassificationTransformerModule(BaseTransformerModule):
                 helper object to compute performance metrics during training
         """
         if scorer is None:
-            scorer = BaseSequenceClassificationScorer(self.num_labels)
+            scorer = BaseSequenceClassificationScorer(list(range(self.num_labels)))
 
         self.scorer = deepcopy(scorer)
         self.valid_scorer = deepcopy(scorer)
