@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 import lightning.pytorch as pl
 import matplotlib.pyplot as plt
@@ -13,6 +13,7 @@ from torch.nn import CrossEntropyLoss
 from transformers.modeling_outputs import SequenceClassifierOutput
 
 from bert_squeeze.distillation.base_distiller import BaseDistiller
+from bert_squeeze.utils.experiment_logging import ExperimentLogger
 from bert_squeeze.utils.losses import LabelSmoothingLoss
 from bert_squeeze.utils.losses.distillation_losses import KLDivLoss
 from bert_squeeze.utils.scorers import BaseSequenceClassificationScorer
@@ -71,7 +72,7 @@ class BaseSequenceClassificationDistiller(BaseDistiller):
                 "You are using label smoothing and the smoothing parameteris set to 0.0."
             )
         elif objective == "weighted" and all(
-            [w == 1.0 for w in self.params.get("class_weights", None)]
+            w == 1.0 for w in self.params.get("class_weights", [])
         ):
             logging.warning(
                 "You are using a weighted CrossEntropy but the class"
@@ -103,13 +104,15 @@ class BaseSequenceClassificationDistiller(BaseDistiller):
         self.s_valid_scorer = BaseSequenceClassificationScorer(self.labels)
         self.s_test_scorer = BaseSequenceClassificationScorer(self.labels)
 
-    def get_teacher_logits(self, batch: Dict[str, torch.Tensor]) -> Any:
+    def get_teacher_logits(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         raise NotImplementedError()
 
-    def get_student_logits(self, batch: Dict[str, torch.Tensor]) -> Any:
+    def get_student_logits(
+        self, batch: Dict[str, torch.Tensor]
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         raise NotImplementedError()
 
-    def log_eval_report(self, probs: List[np.array]) -> None:
+    def log_eval_report(self, probs: List[np.ndarray]) -> None:
         """
         Method that logs an evaluation report.
 
@@ -123,11 +126,12 @@ class BaseSequenceClassificationDistiller(BaseDistiller):
         super().log_eval_report()
 
         # logging probability distributions
-        for i in range(len(probs)):
+        exp_logger = ExperimentLogger.from_module(self)
+        for i, prob in enumerate(probs):
             fig = plt.figure(figsize=(15, 15))
-            sns.distplot(probs[i], kde=False, bins=100)
-            plt.title("Probability boxplot for label {}".format(i))
-            self.logger.experiment.add_figure("eval/dist_label_{}".format(i), fig)
+            sns.distplot(prob, kde=False, bins=100)
+            plt.title(f"Probability boxplot for label {i}")
+            exp_logger.add_figure(f"eval/dist_label_{i}", fig)
             plt.close("all")
 
 
